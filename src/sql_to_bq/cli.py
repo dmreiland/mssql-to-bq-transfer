@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--bq-table', required=True, help='BigQuery table name')
     parser.add_argument('--key-path', required=True, help='Path to service account key file')
     parser.add_argument('--chunk-size', type=int, default=100000, help='Chunk size for processing')
+    parser.add_argument('--total-rows', type=int,help='Total rows of returned by the table or sql query')
 
     args = parser.parse_args()
 
@@ -32,7 +33,8 @@ def main():
         bq_dataset=args.bq_dataset,
         bq_table=args.bq_table,
         key_path=args.key_path,
-        chunk_size=args.chunk_size
+        chunk_size=args.chunk_size,
+        total_rows=args.total_rows
     )
 
     result = transfer.transfer_data()

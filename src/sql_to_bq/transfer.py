@@ -31,6 +31,7 @@ class SQLServerToBigQueryTransfer:
         bq_dataset: str = None,
         bq_table: str = None,
         key_path: str = None,
+        total_rows: Optional[int] = None,
         chunk_size: int = 100000,
         sql_username: Optional[str] = None,
         sql_password: Optional[str] = None,
@@ -46,6 +47,7 @@ class SQLServerToBigQueryTransfer:
         self.bq_table = bq_table
         self.key_path = key_path
         self.chunk_size = chunk_size
+        self.total_rows = total_rows
         self.sql_username = sql_username
         self.sql_password = sql_password
         self.sql_driver = sql_driver
@@ -55,6 +57,8 @@ class SQLServerToBigQueryTransfer:
 
         # Full BigQuery table reference
         self.bq_table_ref = f"{self.bq_project}.{self.bq_dataset}.{self.bq_table}"
+
+        self.user_provided_total_rows = total_rows
 
         # Initialize connections
         self._init_connections()
@@ -102,9 +106,13 @@ class SQLServerToBigQueryTransfer:
 
     def _get_total_rows(self) -> int:
         """Get the total number of rows to transfer."""
-        cursor = self.sql_conn.cursor()
+        if self.user_provided_total_rows is not None:
+            logger.info(f"Using user-provided total row count: {self.user_provided_total_rows}")
+            return self.user_provided_total_rows
 
         try:
+            cursor = self.sql_conn.cursor()
+
             if self.sql_query:
                 count_query = f"SELECT COUNT(*) FROM ({self.sql_query}) AS subquery"
             else:
@@ -200,6 +208,10 @@ class SQLServerToBigQueryTransfer:
 
                     rows_transferred += chunk_rows
                     first_chunk = False
+
+                    if chunk_rows < limit:
+                        logger.warning(f"Received {chunk_rows} rows when expecting {limit}, reached end of data")
+                        break
                 else:
                     logger.info("Chunk is empty, skipping upload")
 

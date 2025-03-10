@@ -128,3 +128,50 @@ class TestSQLServerToBigQueryTransfer(unittest.TestCase):
 
                     spy_read_chunk.assert_has_calls(expected_calls, any_order=False)
                     assert mock_upload.call_count == 4
+    
+    @patch('pyodbc.connect')
+    @patch('google.oauth2.service_account.Credentials.from_service_account_file')
+    @patch('google.cloud.bigquery.Client.from_service_account_json')
+    def test_user_provided_row_count(self, mock_bq_client_from_json, mock_credentials, mock_pyodbc_connect):
+        """Test transfer with user-provided row count"""
+        # Mock SQL connection
+        mock_conn = MagicMock()
+        mock_pyodbc_connect.return_value = mock_conn
+
+        # Create transfer object with user-provided row count
+        transfer = SQLServerToBigQueryTransfer(
+            sql_server="mock-server",
+            sql_database="mock-db",
+            sql_table="mock_table",
+            chunk_size=25,
+            key_path=self.temp_key_file.name,
+            bq_project="test-project",
+            bq_dataset="test_dataset",
+            bq_table="test_table",
+            total_rows=100
+        )
+
+        with patch.object(transfer, '_read_chunk', wraps=transfer._read_chunk) as spy_read_chunk:
+            with patch.object(transfer, '_upload_to_bigquery') as mock_upload:
+                with patch('polars.read_database') as mock_read_database:
+                    mock_dfs = []
+                    for i in range(4):
+                        mock_df = MagicMock()
+                        mock_df.is_empty.return_value = False
+                        mock_df.shape = (25, 10)  # 25 rows, 10 columns
+                        mock_df.estimated_size.return_value = 1024 * 1024  # 1 MB
+                        mock_dfs.append(mock_df)
+
+                    mock_read_database.side_effect = mock_dfs
+                    result = transfer.transfer_data()
+
+                    assert result["success"] is True
+                    assert result["total_rows"] == 100
+                    assert result["rows_transferred"] == 100
+
+                    cursor = mock_conn.cursor.return_value
+                    for call_args in cursor.execute.call_args_list:
+                        assert "COUNT(*)" not in call_args[0][0]
+
+                    assert spy_read_chunk.call_count == 4
+                    assert mock_upload.call_count == 4

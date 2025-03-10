@@ -210,6 +210,40 @@ For optimal performance with large datasets:
 
 2. **Memory monitoring**: Watch memory usage during transfers and adjust chunk size accordingly.
 
+3. **Provide total row count**: For large tables, counting the total number of rows can be a performance bottleneck. If you know the approximate number of rows, you can provide it to avoid the overhead:
+
+```python
+# Without row count (will count rows first, which can be slow for large tables)
+transfer = SQLServerToBigQueryTransfer(
+    sql_server="your-server",
+    sql_database="your-db",
+    sql_table="large_table",
+    # other parameters...
+)
+
+# With row count (skips the counting step)
+transfer = SQLServerToBigQueryTransfer(
+    sql_server="your-server",
+    sql_database="your-db",
+    sql_table="large_table",
+    total_rows=1000000,  # Provide approximate row count
+    # other parameters...
+)
+```
+
+```bash
+# CLI use with row count
+uv run -m sql_to_bq.cli \
+  --sql-server "your-server" \
+  --sql-database "your-database" \
+  --sql-query "SELECT * FROM customers WHERE create_date > '2023-01-01' AND status = 'active'" \
+  --bq-project "your-gcp-project" \
+  --bq-dataset "your_dataset" \
+  --bq-table "active_customers_2023" \
+  --total_rows 1000000 \
+  --key-path "/path/to/service-account-key.json"
+```
+
 ## Troubleshooting
 
 ### Common Issues
