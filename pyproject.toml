@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sql-to-bq-transfer"
+version = "0.1.0"
+description = "Transfer data from SQL Server to BigQuery using Polars"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+dependencies = [
+    "polars>=0.19.3",
+    "pyarrow>=14.0.1",
+    "google-cloud-bigquery>=3.11.4",
+    "google-cloud-bigquery-storage>=2.28.0",
+    "pyodbc>=4.0.39",
+    "google-auth>=2.23.0",
+    "google-auth-oauthlib>=1.0.0",
+    "google-cloud-core>=2.3.3",
+    "pandas-gbq>=0.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+sql-to-bq = "sql_to_bq.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sql_to_bq"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
