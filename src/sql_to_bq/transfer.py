@@ -40,6 +40,7 @@ class SQLServerToBigQueryTransfer:
         sql_username: Optional[str] = None,
         sql_password: Optional[str] = None,
         sql_driver: str = "ODBC Driver 17 for SQL Server",
+        write_mode: str = "truncate_append"
     ):
         """Initialize the transfer with connection parameters."""
         self.sql_server = sql_server
@@ -55,6 +56,7 @@ class SQLServerToBigQueryTransfer:
         self.sql_username = sql_username
         self.sql_password = sql_password
         self.sql_driver = sql_driver
+        self.write_mode = write_mode
 
         if not sql_query and not sql_table:
             raise ValueError("Either sql_query or sql_table name must be provided")
@@ -170,10 +172,17 @@ class SQLServerToBigQueryTransfer:
         temp_file = os.path.join(temp_dir, f"bq_upload_{unique_id}.parquet")
 
         try:
+            if self.write_mode == "truncate_append":
+                write_disposition = (
+                    bigquery.WriteDisposition.WRITE_TRUNCATE if is_first_chunk 
+                    else bigquery.WriteDisposition.WRITE_APPEND
+                )
+            else:
+                write_disposition = bigquery.WriteDisposition.WRITE_APPEND
+
             job_config = bigquery.LoadJobConfig(
                 source_format=bigquery.SourceFormat.PARQUET,
-                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE if is_first_chunk 
-                                else bigquery.WriteDisposition.WRITE_APPEND,
+                write_disposition=write_disposition,
                 autodetect=True,
             )
 

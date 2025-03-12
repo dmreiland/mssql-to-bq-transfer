@@ -142,6 +142,7 @@ uv run sql-to-bq \
   --bq-project "your-gcp-project" \
   --bq-dataset "your_dataset" \
   --bq-table "your_table" \
+  --write-mode "append" \
   --key-path "/path/to/service-account-key.json" \
   --chunk-size 50000
 
