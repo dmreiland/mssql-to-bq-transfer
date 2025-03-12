@@ -2,10 +2,14 @@ import polars as pl
 import pyodbc
 import time
 import logging
+import os
+import uuid
+import tempfile
 from google.cloud import bigquery
 from google.oauth2 import service_account
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 import sys
+import gc
 
 # Configure logging
 logging.basicConfig(
@@ -35,7 +39,7 @@ class SQLServerToBigQueryTransfer:
         chunk_size: int = 100000,
         sql_username: Optional[str] = None,
         sql_password: Optional[str] = None,
-        sql_driver: str = "ODBC Driver 17 for SQL Server"
+        sql_driver: str = "ODBC Driver 17 for SQL Server",
     ):
         """Initialize the transfer with connection parameters."""
         self.sql_server = sql_server
@@ -149,46 +153,78 @@ class SQLServerToBigQueryTransfer:
             return df
         except Exception as e:
             logger.error(f"Error reading chunk offset {offset}, limit: {limit}: {e}")
+            try:
+                self.sql_conn = pyodbc.connect(self.conn_str)
+            except:
+                pass
             raise
 
     def _upload_to_bigquery(self, df: pl.DataFrame, is_first_chunk: bool) -> None:
-        """Upload a Polars DataFrame to BigQuery."""
+        """Upload a Polars DataFrame to BigQuery with improved file handling."""
         if df.is_empty():
             logger.info("Skipping empty chunk")
             return
 
-        # Configure job
-        job_config = bigquery.LoadJobConfig(
-            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE if is_first_chunk 
-                             else bigquery.WriteDisposition.WRITE_APPEND
-        )
+        temp_dir = tempfile.gettempdir()
+        unique_id = str(uuid.uuid4())
+        temp_file = os.path.join(temp_dir, f"bq_upload_{unique_id}.parquet")
 
         try:
-            # Load data
-            job = self.bq_client.load_table_from_dataframe(
-                df.to_pandas(), 
-                self.bq_table_ref,
-                job_config=job_config
+            job_config = bigquery.LoadJobConfig(
+                source_format=bigquery.SourceFormat.PARQUET,
+                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE if is_first_chunk 
+                                else bigquery.WriteDisposition.WRITE_APPEND,
+                autodetect=True,
             )
-            job.result()  # Wait for job to complete
+
+            df.write_parquet(temp_file)
+
+            with open(temp_file, "rb") as source_file:
+                job = self.bq_client.load_table_from_file(
+                    source_file,
+                    self.bq_table_ref,
+                    job_config=job_config
+                )
+
+            job.result()
 
             logger.info(f"Uploaded {df.shape[0]} rows to BigQuery")
+
         except Exception as e:
             logger.error(f"Error uploading to BigQuery: {e}")
             raise
 
+        finally:
+            try:
+                if os.path.exists(temp_file):
+                    df = None
+                    gc.collect()
+
+                    for i in range(5):
+                        try:
+                            os.remove(temp_file)
+                            break
+                        except PermissionError:
+                            if i < 4:
+                                time.sleep(0.5)
+                            else:
+                                logger.warning(f"Could not remove temporary file: {temp_file}")
+            except Exception as cleanup_error:
+                logger.warning(f"Error during cleanup of temporary file: {cleanup_error}")
+
     def transfer_data(self) -> Dict[str, Any]:
         """Transfer data from SQL Server to BigQuery in chunks."""
         start_time = time.time()
+        bytes_transferred = 0
+        rows_transferred = 0
 
         try:
             # Get total rows
             total_rows = self._get_total_rows()
-            logger.info(f"Starting transfer of {total_rows} rows")
+            logger.info(f"Starting transfer of {total_rows} rows with chunk size {self.chunk_size}")
 
             # Process in chunks
             first_chunk = True
-            rows_transferred = 0
 
             for offset in range(0, total_rows, self.chunk_size):
                 chunk_start_time = time.time()
@@ -202,7 +238,15 @@ class SQLServerToBigQueryTransfer:
                 # Upload to BigQuery if not empty
                 if not df_chunk.is_empty():
                     chunk_rows = df_chunk.shape[0]
-                    logger.info(f"Read {chunk_rows} rows ({df_chunk.estimated_size() / 1024 / 1024:.2f} MB)")
+                    try:
+                        chunk_bytes = df_chunk.estimated_size()
+                    except:
+                        # Fallback if estimated_size() is not available
+                        chunk_bytes = chunk_rows * 1000  # Rough estimate: 1KB per row
+
+                    bytes_transferred += chunk_bytes
+
+                    logger.info(f"Read {chunk_rows} rows ({chunk_bytes / 1024 / 1024:.2f} MB)")
 
                     self._upload_to_bigquery(df_chunk, first_chunk)
 
@@ -220,23 +264,30 @@ class SQLServerToBigQueryTransfer:
 
             # Get final statistics
             total_time = time.time() - start_time
+            mb_transferred = bytes_transferred / (1024 * 1024)
 
             result = {
                 "success": True,
                 "rows_transferred": rows_transferred,
                 "total_rows": total_rows,
                 "time_taken": total_time,
-                "rows_per_second": rows_transferred / total_time if total_time > 0 else 0
+                "rows_per_second": rows_transferred / total_time if total_time > 0 else 0,
+                "mb_transferred": mb_transferred,
+                "mb_per_second": mb_transferred / total_time if total_time > 0 else 0,
             }
 
-            logger.info(f"Transfer completed: {result}")
+            logger.info(f"Transfer completed: {rows_transferred} rows in {total_time:.2f} seconds")
             return result
 
         except Exception as e:
             logger.error(f"Transfer failed: {e}")
+            total_time = time.time() - start_time
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "time_taken": total_time,
+                "rows_transferred": rows_transferred,
+                "mb_transferred": bytes_transferred / (1024 * 1024)
             }
         finally:
             # Close connections
